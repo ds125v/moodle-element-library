@@ -1920,4 +1920,89 @@ class moodlelib_testcase extends advanced_testcase {
         );
         $this->assertEquals(convert_to_array($obj), $ar);
     }
+
+    /**
+     * Test function password_is_legacy_hash()
+     */
+    public function test_password_is_legacy_hash() {
+        // well formed md5s should be matched
+        foreach (array('some', 'strings', 'to_check!') as $string) {
+            $md5 = md5($string);
+            $this->assertTrue(password_is_legacy_hash($md5));
+        }
+        // strings that are not md5s should not be matched
+        foreach (array('', 'not cached', 'IPW8WTcsWNgAWcUS1FBVHegzJnw5M2jOmYkmfc8z.xdBOyC4Caeum') as $not_an_md5) {
+            $this->assertFalse(password_is_legacy_hash($not_an_md5));
+        }
+    }
+
+    /**
+     * Test function validate_internal_user_password()
+     */
+    public function test_validate_internal_user_password() {
+        if (version_compare(PHP_VERSION, '5.3.7', '<')) {
+            // prior to 5.3.7 we can't test bcrypt as library isn't supported
+            // test legacy md5 hashes instead
+            // can't hardcode these as we don't know the site's password salt
+            $valid_hashes = array(
+                'pw' => hash_internal_user_password_md5('pw'),
+                'abc' => hash_internal_user_password_md5('abc'),
+                'C0mP1eX_&}<?@*&%` |\"' => hash_internal_user_password_md5('C0mP1eX_&}<?@*&%` |\"'),
+                'ĩńťėŕňăţĩōŋāĹ' => hash_internal_user_password_md5('ĩńťėŕňăţĩōŋāĹ')
+            );
+        } else {
+            // otherwise test bcrypt hashes
+            $valid_hashes = array(
+                'pw' => '$2y$10$LOSDi5eaQJhutSRun.OVJ.ZSxQZabCMay7TO1KmzMkDMPvU40zGXK',
+                'abc' => '$2y$10$VWTOhVdsBbWwtdWNDRHSpewjd3aXBQlBQf5rBY/hVhw8hciarFhXa',
+                'C0mP1eX_&}<?@*&%` |\"' => '$2y$10$3PJf.q.9ywNJlsInPbqc8.IFeSsvXrGvQLKRFBIhVu1h1I3vpIry6',
+                'ĩńťėŕňăţĩōŋāĹ' => '$2y$10$3A2Y8WpfRAnP3czJiSv6N.6Xp0T8hW3QZz2hUCYhzyWr1kGP1yUve'
+            );
+        }
+
+        foreach ($valid_hashes as $password => $hash) {
+            $user = new stdClass();
+            $user->auth = 'manual';
+            $user->password = $hash;
+            // the correct password should be validated
+            $this->assertTrue(validate_internal_user_password($user, $password));
+            // an incorrect password should not be validated
+            $this->assertFalse(validate_internal_user_password($user, 'badpw'));
+        }
+    }
+
+    /**
+     * Test function hash_internal_user_password()
+     */
+    public function test_hash_internal_user_password() {
+        $passwords = array('pw', 'abc123', 'C0mP1eX_&}<?@*&%` |\"', 'ĩńťėŕňăţĩōŋāĹ');
+
+        // just check that some passwords that we convert to hashes can
+        // be validated
+        foreach ($passwords as $password) {
+            $hash = hash_internal_user_password($password);
+            $user = new stdClass();
+            $user->auth = 'manual';
+            $user->password = $hash;
+            $this->assertTrue(validate_internal_user_password($user, $password));
+        }
+    }
+
+    /**
+     * Test function update_internal_user_password()
+     */
+    public function test_update_internal_user_password() {
+        global $DB;
+        $this->resetAfterTest();
+        $passwords = array('password', '1234', 'changeme', '****');
+        foreach ($passwords as $password) {
+            $user = $this->getDataGenerator()->create_user(array('auth'=>'manual'));
+            update_internal_user_password($user, $password);
+            // the user object should have been updated
+            $this->assertTrue(validate_internal_user_password($user, $password));
+            // the database field for the user should also have been updated to the
+            // same value
+            $this->assertEquals($user->password, $DB->get_field('user', 'password', array('id' => $user->id)));
+        }
+    }
 }

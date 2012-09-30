@@ -4246,14 +4246,18 @@ function complete_user_login($user) {
 }
 
 /**
- * Compare password against hash stored in internal user table.
- * If necessary it also updates the stored hash to new format.
+ * Compare the password hash stored in the internal user table
+ * using the legacy (md5) hashing algorithm
+ *
+ * This is being replaced by a new algorithm but the old check is
+ * still required in order to validate users who have not yet been
+ * migrated and for bulk imports
  *
  * @param stdClass $user (password property may be updated)
  * @param string $password plain text password
  * @return bool is password valid?
  */
-function validate_internal_user_password($user, $password) {
+function validate_internal_user_password_md5($user, $password) {
     global $CFG;
 
     if (!isset($CFG->passwordsaltmain)) {
@@ -4294,12 +4298,12 @@ function validate_internal_user_password($user, $password) {
 }
 
 /**
- * Calculate hashed value from password using current hash mechanism.
+ * Calculate hashed value from password using md5 (the legacy hash mechanism).
  *
  * @param string $password
  * @return string password hash
  */
-function hash_internal_user_password($password) {
+function hash_internal_user_password_md5($password) {
     global $CFG;
 
     if (isset($CFG->passwordsaltmain)) {
@@ -4310,6 +4314,82 @@ function hash_internal_user_password($password) {
 }
 
 /**
+ * Update password hash in user object using legacy (md5) algorithm.
+ *
+ * @param stdClass $user (password property may be updated)
+ * @param string $password plain text password
+ * @return bool always returns true
+ */
+function update_internal_user_password_md5($user, $password) {
+    global $DB;
+
+    $authplugin = get_auth_plugin($user->auth);
+    if ($authplugin->prevent_local_passwords()) {
+        $hashedpassword = 'not cached';
+    } else {
+        $hashedpassword = hash_internal_user_password_md5($password);
+    }
+
+    if ($user->password !== $hashedpassword) {
+        $DB->set_field('user', 'password',  $hashedpassword, array('id'=>$user->id));
+        $user->password = $hashedpassword;
+    }
+
+    return true;
+}
+
+/**
+ * Check a password hash to see if it was hashed using the
+ * legacy hash algorithm (md5)
+ *
+ * @param string $password String to check
+ * @return boolean True if the $password matches the format of an md5 sum
+ */
+function password_is_legacy_hash($password) {
+    return (bool) preg_match('/^[0-9a-f]{32}$/', $password);
+}
+
+/**
+ * Compare password against hash stored in internal user table.
+ * If necessary it also updates the stored hash to new format.
+ *
+ * @param stdClass $user (password property may be updated)
+ * @param string $password plain text password
+ * @return bool is password valid?
+ */
+function validate_internal_user_password($user, $password) {
+    global $CFG;
+    require_once($CFG->libdir.'/password_compat/lib/password.php');
+
+    if (password_is_legacy_hash($user->password)) {
+        // 'old' password: validate then migrate to 'new' algorithm if possible
+        return validate_internal_user_password_md5($user, $password);
+    } else {
+        // 'new' password already exists
+        return password_verify($password, $user->password);
+    }
+}
+
+/**
+ * Calculate hashed value from password using current hash mechanism.
+ *
+ * @param string $password
+ * @return string password hash
+ */
+function hash_internal_user_password($password) {
+    global $CFG;
+    require_once($CFG->libdir.'/password_compat/lib/password.php');
+
+    // use the legacy hashing algorithm (md5) if PHP is not new enough
+    // to support bcrypt properly
+    if (version_compare(PHP_VERSION, '5.3.7', '<')) {
+        return hash_internal_user_password_md5($password);
+    }
+
+    return password_hash($password, PASSWORD_DEFAULT);
+}
+
+/**
  * Update password hash in user object.
  *
  * @param stdClass $user (password property may be updated)
@@ -4317,16 +4397,28 @@ function hash_internal_user_password($password) {
  * @return bool always returns true
  */
 function update_internal_user_password($user, $password) {
-    global $DB;
+    global $CFG, $DB;
+    require_once($CFG->libdir.'/password_compat/lib/password.php');
 
+    // use the legacy hashing algorithm (md5) if PHP is not new enough
+    // to support bcrypt properly
+    if (version_compare(PHP_VERSION, '5.3.7', '<')) {
+        return update_internal_user_password_md5($user, $password);
+    }
+
+    // figure out what the hashed password should be
     $authplugin = get_auth_plugin($user->auth);
     if ($authplugin->prevent_local_passwords()) {
         $hashedpassword = 'not cached';
     } else {
-        $hashedpassword = hash_internal_user_password($password);
+        $hashedpassword = password_hash($password, PASSWORD_DEFAULT);
     }
 
-    if ($user->password !== $hashedpassword) {
+    // if verification fails then it means the password has changed
+    $password_changed = !password_verify($password, $user->password);
+    $algorithm_changed = password_needs_rehash($user->password, PASSWORD_BCRYPT);
+
+    if ($password_changed || $algorithm_changed) {
         $DB->set_field('user', 'password',  $hashedpassword, array('id'=>$user->id));
         $user->password = $hashedpassword;
     }
@@ -5528,9 +5620,10 @@ function generate_email_supportuser() {
  * @global object
  * @global object
  * @param user $user A {@link $USER} object
+ * @param boolean $legacyhash If true, use the legacy hashing algorithm (md5) for the password
  * @return boolean|string Returns "true" if mail was sent OK and "false" if there was an error
  */
-function setnew_password_and_mail($user) {
+function setnew_password_and_mail($user, $legacyhash = false) {
     global $CFG, $DB;
 
     // we try to send the mail in language the user understands,
@@ -5544,7 +5637,12 @@ function setnew_password_and_mail($user) {
 
     $newpassword = generate_password();
 
-    $DB->set_field('user', 'password', hash_internal_user_password($newpassword), array('id'=>$user->id));
+    if ($legacyhash) {
+        $hashed_password = hash_internal_user_password_md5($newpassword);
+    } else {
+        $hashed_password = hash_internal_user_password($newpassword);
+    }
+    $DB->set_field('user', 'password', $hashed_password, array('id'=>$user->id));
 
     $a = new stdClass();
     $a->firstname   = fullname($user, true);

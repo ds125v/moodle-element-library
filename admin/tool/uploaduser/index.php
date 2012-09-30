@@ -580,7 +580,10 @@ if ($formdata = $mform2->is_cancelled()) {
                         unset_user_preference('auth_forcepasswordchange', $existinguser);
                     }
                     unset_user_preference('create_password', $existinguser); // no need to create password any more
-                    $existinguser->password = hash_internal_user_password($user->password);
+                    // use legacy md5 format for hash as bcrypt may be too slow
+                    // for lots of users. Hashes will be automatically updated the
+                    // first time the user logs in
+                    $existinguser->password = hash_internal_user_password_md5($user->password);
                     $upt->track('password', $user->password, 'normal', false);
                 } else {
                     // do not print password when not changed
@@ -703,7 +706,10 @@ if ($formdata = $mform2->is_cancelled()) {
                         }
                         $forcechangepassword = true;
                     }
-                    $user->password = hash_internal_user_password($user->password);
+                    // use legacy md5 format for hash as bcrypt may be too slow
+                    // for lots of users. Hashes will be automatically updated the
+                    // first time the user logs in
+                    $user->password = hash_internal_user_password_md5($user->password);
                 }
             } else {
                 $user->password = 'not cached';

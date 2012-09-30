@@ -216,7 +216,10 @@ function cron_run() {
 
         // note: we can not send emails to suspended accounts
         foreach ($newusers as $newuser) {
-            if (setnew_password_and_mail($newuser)) {
+            // use legacy md5 format for hash as bcrypt may be too slow
+            // for lots of users. Hashes will be automatically updated the
+            // first time the user logs in
+            if (setnew_password_and_mail($newuser, true)) {
                 unset_user_preference('create_password', $newuser);
                 set_user_preference('auth_forcepasswordchange', 1, $newuser);
             } else {
