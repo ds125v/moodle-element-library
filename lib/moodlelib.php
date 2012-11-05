@@ -4416,7 +4416,7 @@ function update_internal_user_password($user, $password) {
 
     // if verification fails then it means the password has changed
     $password_changed = !password_verify($password, $user->password);
-    $algorithm_changed = password_needs_rehash($user->password, PASSWORD_BCRYPT);
+    $algorithm_changed = password_needs_rehash($user->password, PASSWORD_DEFAULT);
 
     if ($password_changed || $algorithm_changed) {
         $DB->set_field('user', 'password',  $hashedpassword, array('id'=>$user->id));
